@@ -24,7 +24,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Hi! I’m your calorie tracker bot.\n"
         "Send messages like:\n\n🍎 `apple 95`\n🍗 `chicken breast 200`\n\n"
-        "Use /summary to see today’s total, or /chart for a weekly view."
+        "Use /summary to see today’s total, or /chart for a weekly view!!"
     )
 
 
