@@ -5,97 +5,112 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 import matplotlib.pyplot as plt
 import os
 
-TOKEN = os.getenv("TOKEN")
-DATA_FILE = "meals.csv"
+FOODS_FILE = "foods.csv"
 
-
-def load_data():
-    try:
-        return pd.read_csv(DATA_FILE)
-    except FileNotFoundError:
-        return pd.DataFrame(columns=["date", "food", "calories"])
-
-
-def save_data(df):
-    df.to_csv(DATA_FILE, index=False)
+if not os.path.exists(FOODS_FILE):
+    pd.DataFrame(columns=["name", "protein", "fat", "carb", "calories"]).to_csv(FOODS_FILE, index=False)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Hi! I’m your calorie tracker bot.\n"
-        "Send messages like:\n\n🍎 `apple 95`\n🍗 `chicken breast 200`\n\n"
-        "Use /summary to see today’s total, or /chart for a weekly view!!"
-    )
+    await update.message.reply_text("Welcome to CalorieTrackerBot! Use /setfood and /log to begin.")
 
 
-async def add_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    parts = text.split()
+async def setfood(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        args = context.args
+        if len(args) != 5:
+            await update.message.reply_text("Usage: /setfood name protein fat carb calories")
+            return
 
-    if len(parts) < 2 or not parts[-1].isdigit():
-        await update.message.reply_text("Please send in format: `foodname calories` (e.g. banana 105)")
+        name, protein, fat, carb, calories = args
+        df = pd.read_csv(FOODS_FILE)
+
+        df = df[df['name'] != name]  # overwrite existing
+        df = pd.concat([
+            df,
+            pd.DataFrame([{
+                "name": name.lower(),
+                "protein": float(protein),
+                "fat": float(fat),
+                "carb": float(carb),
+                "calories": float(calories)
+            }])
+        ])
+        df.to_csv(FOODS_FILE, index=False)
+        await update.message.reply_text(f"{name} saved to database ✅")
+
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+
+async def log(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
         return
 
-    calories = int(parts[-1])
-    food = " ".join(parts[:-1])
-    df = load_data()
-    df.loc[len(df)] = [datetime.now().strftime("%Y-%m-%d"), food, calories]
-    save_data(df)
-
-    await update.message.reply_text(f"✅ Added {food} ({calories} kcal).")
-
-
-async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    df = load_data()
-    today = datetime.now().strftime("%Y-%m-%d")
-    total = df[df["date"] == today]["calories"].sum()
-    await update.message.reply_text(f"📅 Today’s total: {total} kcal")
-
-
-async def chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    df = load_data()
-    if df.empty:
-        await update.message.reply_text("No data yet!")
+    lines = update.message.text.strip().split("\n")[1:]
+    if not lines:
+        await update.message.reply_text("Please provide food and amount lines after /log.")
         return
 
-    df["date"] = pd.to_datetime(df["date"])
-    weekly = df.groupby("date")["calories"].sum().tail(7)
+    df_foods = pd.read_csv(FOODS_FILE)
+    results = []
 
-    plt.figure()
-    weekly.plot(kind="bar", title="Last 7 Days Calorie Intake")
-    plt.ylabel("Calories")
-    plt.tight_layout()
-    plt.savefig("chart.png")
-    plt.close()
+    for line in lines:
+        parts = line.strip().split()
+        if len(parts) != 2:
+            continue
+        name, amount = parts[0].lower(), float(parts[1])
+        food_row = df_foods[df_foods["name"] == name]
 
-    await update.message.reply_photo(photo=open("chart.png", "rb"))
+        if food_row.empty:
+            results.append({"Food": name, "Error": "Not found"})
+            continue
 
+        r = food_row.iloc[0]
+        factor = amount / 100
+        results.append({
+            "Food": name,
+            "Protein": r["protein"] * factor,
+            "Fat": r["fat"] * factor,
+            "Carb": r["carb"] * factor,
+            "Calories": r["calories"] * factor
+        })
 
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("summary", summary))
-app.add_handler(CommandHandler("chart", chart))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_food))
+    df_result = pd.DataFrame(results)
+
+    if "Error" in df_result.columns:
+        msg = "Some foods not found. Please check with /setfood."
+    else:
+        totals = df_result[["Protein", "Fat", "Carb", "Calories"]].sum()
+        df_result.loc[len(df_result)] = ["Total", *totals]
+        msg = "```\n" + df_result.to_string(index=False, formatters={"Calories": "{:.0f}".format}) + "\n```"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
 
 if __name__ == "__main__":
-    app.run_polling()
+    import threading
+    from flask import Flask
 
+    TOKEN = os.getenv("TOKEN")
 
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("setfood", setfood))
+    app.add_handler(CommandHandler("log", log))
 
-import threading
-from flask import Flask
+    # Run Flask + Bot together for Render
+    from telegram.ext import Application
+    from flask import Flask
+    flask_app = Flask(__name__)
 
-app_flask = Flask(__name__)
+    @flask_app.route('/')
+    def home():
+        return "Bot running!"
 
-@app_flask.route('/')
-def home():
-    return "Bot is running!"
+    def run_bot():
+        app.run_polling()
 
-def run_bot():
-    app.run_polling()
-
-if __name__ == "__main__":
     t = threading.Thread(target=run_bot)
     t.start()
-    app_flask.run(host="0.0.0.0", port=10000)
-
+    flask_app.run(host="0.0.0.0", port=10000)
