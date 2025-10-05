@@ -3,8 +3,9 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import matplotlib.pyplot as plt
+import os
 
-TOKEN = "8239618578:AAH-jd8laNFEivAQHcwZlcC03LFvbdd8UFA"
+TOKEN = os.getenv("TOKEN")
 DATA_FILE = "meals.csv"
 
 
